@@ -33,6 +33,7 @@ instance FreeVar Expr where
       Con _                     -> emptySet
       Var x                     -> singleSet x
       Lit _                     -> emptySet
+      Prim _                    -> emptySet
 
 instance FreeVar Alt where
    freeVar (Alt p e) = freeVar e `diffSet` binder p

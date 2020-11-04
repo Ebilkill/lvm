@@ -15,11 +15,15 @@ module Lvm.Core.Expr
   , Alt(..)
   , Pat(..)
   , Literal(..)
+  , PrimFun(..)
   , Con(..)
   , Variable(..)
   , ppPattern
   , IntType(..)
   , getExpressionStrictness
+
+  , typeOfPrimFun
+  , typeOfPrimFunArity
   )
 where
 
@@ -49,6 +53,7 @@ data Expr       = Let       !Binds Expr
                 | Con       !Con
                 | Var       !Id
                 | Lit       !Literal
+                | Prim      !PrimFun
 
 data Variable = Variable { variableName :: !Id, variableType :: !Type }
 data Binds      = Rec       ![Bind]
@@ -69,8 +74,17 @@ data Literal    = LitInt    !Int !IntType
                 | LitDouble !Double
                 | LitBytes  !Bytes
 
+data PrimFun    = PrimFinish
+                | PrimRead
+                | PrimWrite
+                | PrimWriteCtor !Con
+                | PrimToEnd
+                | PrimNewCursor
+  deriving (Eq, Ord) -- Required for Iridium's Expr's (Eq, Ord)
+
 data Con        = ConId  !Id
                 | ConTuple !Arity
+  deriving (Eq, Ord) -- Required for above Eq, Ord
 
 ----------------------------------------------------------------
 -- Pretty printing
@@ -120,6 +134,7 @@ ppExpr p quantorNames expr = case expr of
   Var x   -> ppVarId x
   Con con -> pretty con
   Lit lit -> pretty lit
+  Prim pr -> pretty pr
  where
   prec p' | p' >= p   = id
           | otherwise = parens
@@ -185,8 +200,66 @@ instance Pretty Literal where
     LitDouble d -> pretty d
     LitBytes  s -> text (show (stringFromBytes s))
 
+instance Pretty PrimFun where
+  pretty PrimFinish     = text "_prim_finish"
+  pretty PrimRead       = text "_prim_read"
+  pretty PrimWrite      = text "_prim_write"
+  pretty PrimToEnd      = text "_prim_to_end"
+  pretty PrimNewCursor  = text "_prim_new_cursor"
+  pretty (PrimWriteCtor (ConId x)) =
+    text "(_prim_write_ctor" <+> text (stringFromId x) <> text ")"
+  pretty (PrimWriteCtor _) =
+    text "_prim_write_ctor__tuple"
+
+instance Show PrimFun where
+  show = show . pretty
+
 getExpressionStrictness :: Expr -> [Bool]
 getExpressionStrictness (Forall _ _ expr) = getExpressionStrictness expr
 getExpressionStrictness (Lam strict _ expr) =
   strict : getExpressionStrictness expr
 getExpressionStrictness _ = []
+
+-- TODO: REMOVE THESE LATER, just here for testing
+packedIntType, intType :: Type
+packedIntType = TCon $ typeConFromString "TreeTest.PACKED_Int"
+intType       = TCon $ typeConFromString "Int"
+
+-- The reason this function has been moved here, is so that Iridium can reach it too!
+typeOfPrimFunArity :: PrimFun -> (Int, Type)
+typeOfPrimFunArity PrimFinish = (,) 2 $
+  typeFunction
+    [ TStrict $ TCon (TConCursorNeeds [] packedIntType)
+    , TStrict $ TCon (TConCursorNeeds [packedIntType] packedIntType)
+    ]
+    packedIntType -- TODO: Return Has cursor
+typeOfPrimFunArity PrimRead   = undefined
+typeOfPrimFunArity PrimWrite  = (,) 2 $
+  typeFunction
+    [ TStrict $ TCon (TConCursorNeeds [intType] packedIntType)
+    , TStrict $ intType
+    ]
+    (TCon (TConCursorNeeds [] packedIntType))
+typeOfPrimFunArity (PrimWriteCtor c) = (,) 1 $
+  typeFunction
+    [ TStrict $ TCon $ TConCursorNeeds [packedIntType] packedIntType
+    ]
+    (TCon $ TConCursorNeeds [intType] packedIntType)
+typeOfPrimFunArity PrimToEnd = (,) 1 $
+  typeFunction
+    [ TStrict $ TCon $ TConCursorNeeds [] packedIntType
+    ]
+    (TCon (TConCursorEnd 0)) -- TODO: Implement addresses for cursors
+typeOfPrimFunArity PrimNewCursor = (0, TCon $ TConCursorNeeds [packedIntType] packedIntType)
+--typeOfPrimFun PrimFinish =
+--  TForall (Quantor 0 (Just "a")) KStar $
+--  TAp (TAp (TCon TConFun) (TCon (TConCursorNeeds [] (TVar 0)))) (TVar 0)
+--typeOfPrimFun PrimWrite  =
+--  TForall (Quantor 0 (Just "a")) KStar $
+--  TForall (Quantor 1 (Just "b")) KStar $
+--  typeApply (typeApply (TCon TConFun) (TCon (TConCursorNeeds [TVar 0] (TVar 1)))) (TVar 0)
+  -- Does not recognize the TVars inside the TConCursor...
+
+typeOfPrimFun :: PrimFun -> Type
+typeOfPrimFun = snd . typeOfPrimFunArity
+

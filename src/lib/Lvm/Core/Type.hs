@@ -42,6 +42,9 @@ data TypeConstant
   | TConTuple !Int
   | TConTypeClassDictionary !Id
   | TConFun
+  | TConCursorEnd !Int -- TODO: Should be an address...
+  | TConCursorNeeds [Type] Type -- Needs inputs to produce output.
+  | TConCursorHas [Type]
   deriving (Eq, Ord)
 
 data IntType
@@ -139,6 +142,17 @@ instance Pretty TypeConstant where
   pretty (TConTypeClassDictionary name) = text "(@dictionary" <+> pretty name <+> text ")"
   pretty (TConTuple arity) = text ('(' : replicate (arity - 1) ',' ++ ")")
   pretty TConFun = text "->"
+  pretty (TConCursorEnd x) = text ("End(addr<" ++ show x ++ ">)") -- TODO: see if this can be more... Text, less String
+  pretty (TConCursorNeeds ts t) =
+        text "Needs(["
+    <>  foldr (\n o -> pretty n <> text "," <+> o) (text "") ts
+    <>  text "],"
+    <+> pretty t
+    <>  text ")"
+  pretty (TConCursorHas ts) =
+        text "Has(["
+    <> foldr (\n o -> pretty n <> text "," <+> o) (text "") ts
+    <> text "])"
 
 dictionaryDataTypeName :: Id -> Id
 dictionaryDataTypeName = idFromString . ("Dict$" ++) . stringFromId
@@ -256,6 +270,14 @@ typeSubstitutions initialSubstitutions leftType = fst $ substitute leftType (M.f
     substitute t@(TVar idx) mapping fresh = case M.lookup idx mapping of
       Just tp -> (tp, fresh)
       Nothing -> (t, fresh)
+    substitute (TCon (TConCursorNeeds ins out)) mapping fresh = TCon $ TConCursorNeeds ins' out', fresh''
+      where
+        (out', fresh') = substitute out mapping fresh
+        (ins', fresh'') =
+          foldl
+          (\(o, f) i -> let (i', f') = substitute i mapping f in (i' : o, f'))
+          ([], fresh')
+          ins
     substitute t _ fresh = (t, fresh)
 
 typeListElement :: Type -> Type

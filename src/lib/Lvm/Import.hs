@@ -165,6 +165,7 @@ lvmImportQualifyModule (valuesMap, typesMap) (Module modName modMajor modMinor m
     travExpr locals (Con c) = Con $ travCon c
     travExpr locals (Var name) = Var $ renameValue locals name
     travExpr locals (Lit lit) = Lit lit
+    travExpr locals (Prim p)  = Prim p
 
     travAlt :: IdSet -> Alt -> Alt
     travAlt locals (Alt pat expr) = Alt (travPat pat) (travExpr locals' expr)
