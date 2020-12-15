@@ -1,20 +1,23 @@
 --------------------------------------------------------------------------------
--- Copyright 2001-2012, Daan Leijen, Bastiaan Heeren, Jurriaan Hage. This file 
--- is distributed under the terms of the BSD3 License. For more information, 
+-- Copyright 2001-2012, Daan Leijen, Bastiaan Heeren, Jurriaan Hage. This file
+-- is distributed under the terms of the BSD3 License. For more information,
 -- see the file "LICENSE.txt", which is included in the distribution.
 --------------------------------------------------------------------------------
 --  $Id: Data.hs 250 2012-08-22 10:59:40Z bastiaan $
 
-module Lvm.Core.Type 
-   ( Type(..), Kind(..), TypeConstant(..), Quantor(..), QuantorNames, IntType(..)
+module Lvm.Core.Type
+   ( Type(..), Kind(..), TypeConstant(..), Quantor(..), QuantorNames, IntType(..), TypeCursor(..)
    , ppTypeVar, ppType, showType, freshQuantorName, arityFromType, typeUnit, typeBool
    , typeToStrict, typeNotStrict, typeIsStrict, typeSetStrict, typeConFromString, typeFunction
-   , typeSubstitute, typeTupleElements, typeRemoveArgumentStrictness, typeWeaken, typeApply
+   , typeSubstitute, typeTupleElements, typeRemoveArgumentStrictness, typeWeaken
    , typeSubstitutions, typeExtractFunction, typeApply, typeApplyList, dictionaryDataTypeName
+   , typeList
    ) where
 
 import Lvm.Common.Id
 import Text.PrettyPrint.Leijen
+
+import Debug.Trace
 
 import qualified Data.Set as S
 import qualified Data.Map as M
@@ -30,6 +33,7 @@ data Type = TAp !Type !Type
           -- * We use Debruijn indices to identify type variables.
           | TVar !Int
           | TCon !TypeConstant
+          | TCursor !TypeCursor
           deriving (Eq, Ord)
 
 newtype Quantor
@@ -43,9 +47,16 @@ data TypeConstant
   | TConTuple !Int
   | TConTypeClassDictionary !Id
   | TConFun
-  | TConCursorEnd !Int -- TODO: Should be an address...
-  | TConCursorNeeds [Type] Type -- Needs inputs to produce output.
-  | TConCursorHas [Type]
+  | TConCons -- Apply to a type, then to another list
+  | TConNil
+  | TConReturnType
+  | TConAppend
+  deriving (Eq, Ord)
+
+data TypeCursor
+  = TCursorEnd !Int -- TODO: Should be an address...
+  | TCursorNeeds Type Type -- Needs inputs to produce output.
+  | TCursorHas Type
   deriving (Eq, Ord)
 
 data IntType
@@ -96,7 +107,7 @@ typeRemoveArgumentStrictness (TForall quantor kind tp) = TForall quantor kind $ 
 typeRemoveArgumentStrictness (TAp (TAp (TCon TConFun) tArg) tReturn) =
   TAp (TAp (TCon TConFun) $ typeNotStrict tArg) $ typeRemoveArgumentStrictness tReturn
 typeRemoveArgumentStrictness (TStrict tp) = TStrict $ typeRemoveArgumentStrictness tp
-typeRemoveArgumentStrictness tp = tp 
+typeRemoveArgumentStrictness tp = tp
 
 typeUnit :: Type
 typeUnit = TCon $ TConTuple 0
@@ -139,17 +150,13 @@ instance Pretty TypeConstant where
   pretty (TConTypeClassDictionary name) = text "(@dictionary" <+> pretty name <+> text ")"
   pretty (TConTuple arity) = text ('(' : replicate (arity - 1) ',' ++ ")")
   pretty TConFun = text "->"
-  pretty (TConCursorEnd x) = text ("End(addr<" ++ show x ++ ">)") -- TODO: see if this can be more... Text, less String
-  pretty (TConCursorNeeds ts t) =
-        text "Needs(["
-    <>  foldr (\n o -> pretty n <> text "," <+> o) (text "") ts
-    <>  text "],"
-    <+> pretty t
-    <>  text ")"
-  pretty (TConCursorHas ts) =
-        text "Has(["
-    <> foldr (\n o -> pretty n <> text "," <+> o) (text "") ts
-    <> text "])"
+  pretty TConNil = text "$[]"
+  pretty TConCons = text "$:"
+  pretty TConReturnType = text "ReturnType"
+  pretty TConAppend = text "CursorAppendFn"
+
+instance Pretty TypeCursor where
+  pretty = ppCursor []
 
 dictionaryDataTypeName :: Id -> Id
 dictionaryDataTypeName = idFromString . ("Dict$" ++) . stringFromId
@@ -171,7 +178,7 @@ ppType :: Int -> QuantorNames -> Type -> Doc
 ppType level quantorNames tp
   = parenthesized $
     case tp of
-      TAp (TCon a) t2 | a == TConDataType (idFromString "[]") -> text "[" <> ppType 0 quantorNames t2 <> text "]" 
+      TAp (TCon a) t2 | a == TConDataType (idFromString "[]") -> text "[" <> ppType 0 quantorNames t2 <> text "]"
       TAp (TAp (TCon TConFun) t1) t2 -> ppHi t1 <+> text "->" <+> ppEq t2
       TAp     t1 t2   -> ppEq t1 <+> ppHi t2
       TForall quantor k t   ->
@@ -181,6 +188,7 @@ ppType level quantorNames tp
       TStrict t       -> text "!" <> ppHi t
       TVar    a       -> ppTypeVar quantorNames a
       TCon    a       -> pretty a
+      TCursor a       -> ppCursor quantorNames a
   where
     tplevel = levelFromType tp
     parenthesized doc
@@ -188,6 +196,19 @@ ppType level quantorNames tp
       | otherwise         = parens doc
     ppHi  = ppType (tplevel+1) quantorNames
     ppEq = ppType tplevel quantorNames
+
+ppCursor :: QuantorNames -> TypeCursor -> Doc
+ppCursor quantorNames (TCursorEnd x) = text "End(addr<" <> pretty x <> text ">)" -- TODO: see if this can be more... Text, less String
+ppCursor quantorNames (TCursorNeeds ts t) =
+      text "Needs(["
+  <>  ppType 0 quantorNames ts
+  <>  text "],"
+  <+> ppType 0 quantorNames t
+  <>  text ")"
+ppCursor quantorNames (TCursorHas ts) =
+      text "Has(["
+  <> ppType 0 quantorNames ts
+  <> text "])"
 
 ppKind :: Int -> Kind -> Doc
 ppKind level kind
@@ -212,6 +233,7 @@ levelFromType tp
       TStrict{} -> 5
       TVar{}    -> 6
       TCon{}    -> 6
+      TCursor{} -> 6
 
 levelFromKind :: Kind -> Int
 levelFromKind kind
@@ -230,6 +252,9 @@ typeReindex k = go 0
     go n (TAp t1 t2) = TAp (go n t1) (go n t2)
     go n (TForall q kind t) = TForall q kind $ go (n + 1) t
     go n (TStrict t) = TStrict $ go n t
+    -- go n (TCursor (TCursorNeeds ins out)) = TCursor $ TCursorNeeds (go k' `fmap` ins) (go k' out)
+    -- go n (TCursor c@(TCursorEnd _)) = TCursor c
+    go n (TCursor c) = undefined
     go n (TVar idx)
       | idx < n = TVar idx
       | otherwise = TVar $ n + k (idx - n)
@@ -254,10 +279,9 @@ typeSubstitutions k tps = go k
     go k' (TStrict t) = TStrict $ go k' t
     go k' (TVar idx) = substitute k' idx
     go k' (TCon c) = TCon c
+    go k' (TCursor (TCursorNeeds ins out)) = TCursor $ TCursorNeeds (go k' ins) (go k' out)
+    go k' (TCursor c@(TCursorEnd _)) = TCursor c
     go k' (TCursor c) = undefined
-    {-
-    go k' (TCursor (TCursorNeeds ins out)) = TCursorNeeds (go k' <$> ins) (go k' out)
-    -}
 
     substitute :: Int -> Int -> Type
     substitute k' idx
@@ -306,3 +330,8 @@ typeApplyList tp args = go tp args []
     go (TForall _ _ tp) (arg:args) substitution = go tp args (arg:substitution)
     go tp args [] = foldl TAp tp args
     go tp args substitution = go (typeSubstitutions 0 substitution tp) args []
+
+typeList :: [Type] -> Type
+typeList [] = TCon $ TConNil
+typeList (x:xs) = TAp (TAp (TCon TConCons) x) $ typeList xs
+

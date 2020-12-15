@@ -21,9 +21,6 @@ module Lvm.Core.Expr
   , ppPattern
   , IntType(..)
   , getExpressionStrictness
-
-  , typeOfPrimFun
-  , typeOfPrimFunArity
   )
 where
 
@@ -199,15 +196,12 @@ instance Pretty Literal where
     LitBytes  s -> text (show (stringFromBytes s))
 
 instance Pretty PrimFun where
-  pretty PrimFinish     = text "_prim_finish"
-  pretty PrimRead       = text "_prim_read"
-  pretty PrimWrite      = text "_prim_write"
-  pretty PrimToEnd      = text "_prim_to_end"
-  pretty PrimNewCursor  = text "_prim_new_cursor"
-  pretty (PrimWriteCtor (ConId x)) =
-    text "(_prim_write_ctor" <+> text (stringFromId x) <> text ")"
-  pretty (PrimWriteCtor _) =
-    text "_prim_write_ctor__tuple"
+  pretty PrimFinish         = text "_prim_finish"
+  pretty PrimRead           = text "_prim_read"
+  pretty PrimWrite          = text "_prim_write"
+  pretty PrimToEnd          = text "_prim_to_end"
+  pretty PrimNewCursor      = text "_prim_new_cursor"
+  pretty (PrimWriteCtor c)  = text "(_prim_write_ctor" <+> pretty c <> text ")"
 
 instance Show PrimFun where
   show = show . pretty
@@ -217,47 +211,4 @@ getExpressionStrictness (Forall _ _ expr) = getExpressionStrictness expr
 getExpressionStrictness (Lam strict _ expr) =
   strict : getExpressionStrictness expr
 getExpressionStrictness _ = []
-
--- TODO: REMOVE THESE LATER, just here for testing
-packedIntType, intType :: Type
-packedIntType = TCon $ typeConFromString "TreeTest.PACKED_Int"
-intType       = TCon $ typeConFromString "Int"
-
--- The reason this function has been moved here, is so that Iridium can reach it too!
-typeOfPrimFunArity :: PrimFun -> (Int, Type)
-typeOfPrimFunArity PrimFinish = (,) 2 $
-  typeFunction
-    [ TStrict $ TCon (TConCursorNeeds [] packedIntType)
-    , TStrict $ TCon (TConCursorNeeds [packedIntType] packedIntType)
-    ]
-    packedIntType -- TODO: Return Has cursor
-typeOfPrimFunArity PrimRead   = undefined
-typeOfPrimFunArity PrimWrite  = (,) 2 $
-  typeFunction
-    [ TStrict $ TCon (TConCursorNeeds [intType] packedIntType)
-    , TStrict $ intType
-    ]
-    (TCon (TConCursorNeeds [] packedIntType))
-typeOfPrimFunArity (PrimWriteCtor c) = (,) 1 $
-  typeFunction
-    [ TStrict $ TCon $ TConCursorNeeds [packedIntType] packedIntType
-    ]
-    (TCon $ TConCursorNeeds [intType] packedIntType)
-typeOfPrimFunArity PrimToEnd = (,) 1 $
-  typeFunction
-    [ TStrict $ TCon $ TConCursorNeeds [] packedIntType
-    ]
-    (TCon (TConCursorEnd 0)) -- TODO: Implement addresses for cursors
-typeOfPrimFunArity PrimNewCursor = (0, TCon $ TConCursorNeeds [packedIntType] packedIntType)
---typeOfPrimFun PrimFinish =
---  TForall (Quantor 0 (Just "a")) KStar $
---  TAp (TAp (TCon TConFun) (TCon (TConCursorNeeds [] (TVar 0)))) (TVar 0)
---typeOfPrimFun PrimWrite  =
---  TForall (Quantor 0 (Just "a")) KStar $
---  TForall (Quantor 1 (Just "b")) KStar $
---  typeApply (typeApply (TCon TConFun) (TCon (TConCursorNeeds [TVar 0] (TVar 1)))) (TVar 0)
-  -- Does not recognize the TVars inside the TConCursor...
-
-typeOfPrimFun :: PrimFun -> Type
-typeOfPrimFun = snd . typeOfPrimFunArity
 
