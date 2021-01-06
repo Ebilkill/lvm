@@ -1,3 +1,4 @@
+{-# LANGUAGE PatternSynonyms #-}
 --------------------------------------------------------------------------------
 -- Copyright 2001-2012, Daan Leijen, Bastiaan Heeren, Jurriaan Hage. This file
 -- is distributed under the terms of the BSD3 License. For more information,
@@ -11,7 +12,9 @@ module Lvm.Core.Type
    , typeToStrict, typeNotStrict, typeIsStrict, typeSetStrict, typeConFromString, typeFunction
    , typeSubstitute, typeTupleElements, typeRemoveArgumentStrictness, typeWeaken
    , typeSubstitutions, typeExtractFunction, typeApply, typeApplyList, dictionaryDataTypeName
-   , typeList
+   , typeList, typePrependList
+   -- Pattern synonyms
+   , pattern TypeCons, pattern TypeFun
    ) where
 
 import Lvm.Common.Id
@@ -51,6 +54,7 @@ data TypeConstant
   | TConNil
   | TConReturnType
   | TConAppend
+  | TConWriteLength
   deriving (Eq, Ord)
 
 data TypeCursor
@@ -74,6 +78,9 @@ instance Show IntType where
 data Kind = KFun !Kind !Kind
           | KStar
           deriving (Eq, Ord)
+
+pattern TypeCons head tail = TAp (TAp (TCon TConCons) head) tail
+pattern TypeFun  arg  res  = TAp (TAp (TCon TConFun)  arg ) res
 
 typeConFromString :: String -> TypeConstant
 typeConFromString "->" = TConFun
@@ -104,8 +111,8 @@ typeSetStrict False = typeNotStrict
 
 typeRemoveArgumentStrictness :: Type -> Type
 typeRemoveArgumentStrictness (TForall quantor kind tp) = TForall quantor kind $ typeRemoveArgumentStrictness tp
-typeRemoveArgumentStrictness (TAp (TAp (TCon TConFun) tArg) tReturn) =
-  TAp (TAp (TCon TConFun) $ typeNotStrict tArg) $ typeRemoveArgumentStrictness tReturn
+typeRemoveArgumentStrictness (TypeFun tArg tReturn) =
+  TypeFun (typeNotStrict tArg) $ typeRemoveArgumentStrictness tReturn
 typeRemoveArgumentStrictness (TStrict tp) = TStrict $ typeRemoveArgumentStrictness tp
 typeRemoveArgumentStrictness tp = tp
 
@@ -117,12 +124,12 @@ typeBool = TCon $ TConDataType $ idFromString "Bool"
 
 typeFunction :: [Type] -> Type -> Type
 typeFunction [] ret = ret
-typeFunction (a:as) ret = TAp (TAp (TCon TConFun) a) $ typeFunction as ret
+typeFunction (a:as) ret = TypeFun a $ typeFunction as ret
 
 arityFromType :: Type -> Int
 arityFromType tp
   = case tp of
-      TAp (TAp (TCon TConFun) _) t2 -> arityFromType t2 + 1
+      TypeFun _ t2    -> arityFromType t2 + 1
       TAp     _ _     -> 0 -- assumes saturated constructors!
       TForall _ _ t   -> arityFromType t
       TStrict t       -> arityFromType t
@@ -154,6 +161,7 @@ instance Pretty TypeConstant where
   pretty TConCons = text "$:"
   pretty TConReturnType = text "ReturnType"
   pretty TConAppend = text "CursorAppendFn"
+  pretty TConWriteLength = text "WriteLength"
 
 instance Pretty TypeCursor where
   pretty = ppCursor []
@@ -179,7 +187,7 @@ ppType level quantorNames tp
   = parenthesized $
     case tp of
       TAp (TCon a) t2 | a == TConDataType (idFromString "[]") -> text "[" <> ppType 0 quantorNames t2 <> text "]"
-      TAp (TAp (TCon TConFun) t1) t2 -> ppHi t1 <+> text "->" <+> ppEq t2
+      TypeFun t1 t2   -> ppHi t1 <+> text "->" <+> ppEq t2
       TAp     t1 t2   -> ppEq t1 <+> ppHi t2
       TForall quantor k t   ->
         let quantorName = freshQuantorName quantorNames quantor
@@ -228,7 +236,7 @@ levelFromType :: Type -> Int
 levelFromType tp
   = case tp of
       TForall{} -> 2
-      TAp (TAp (TCon TConFun) _) _ -> 3
+      TypeFun _ _ -> 3
       TAp{}     -> 4
       TStrict{} -> 5
       TVar{}    -> 6
@@ -311,7 +319,7 @@ typeTupleElements tupleType = elements 0 tupleType []
     elements _ tp _ = error $ "typeTupleElements: expected a tuple type, got " ++ showType [] tp ++ " instead"
 
 typeExtractFunction :: Type -> ([Type], Type)
-typeExtractFunction (TAp (TAp (TCon TConFun) t1) t2) = (t1 : args, ret)
+typeExtractFunction (TypeFun t1 t2) = (t1 : args, ret)
   where
     (args, ret) = typeExtractFunction t2
 typeExtractFunction tp = ([], tp)
@@ -331,7 +339,13 @@ typeApplyList tp args = go tp args []
     go tp args [] = foldl TAp tp args
     go tp args substitution = go (typeSubstitutions 0 substitution tp) args []
 
+-- Could be a fold
 typeList :: [Type] -> Type
 typeList [] = TCon $ TConNil
-typeList (x:xs) = TAp (TAp (TCon TConCons) x) $ typeList xs
+typeList (x:xs) = TypeCons x $ typeList xs
+
+-- Assumes the second argument is a list type
+typePrependList :: [Type] -> Type -> Type
+typePrependList []     t = t
+typePrependList (x:xs) t = TypeCons x $ typePrependList xs t
 

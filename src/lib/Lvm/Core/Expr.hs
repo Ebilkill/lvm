@@ -75,6 +75,7 @@ data PrimFun    = PrimFinish
                 | PrimRead
                 | PrimWrite
                 | PrimWriteCtor !Con
+                | PrimWriteLength
                 | PrimToEnd
                 | PrimNewCursor
   deriving (Eq, Ord) -- Required for Iridium's Expr's (Eq, Ord)
@@ -199,6 +200,7 @@ instance Pretty PrimFun where
   pretty PrimFinish         = text "_prim_finish"
   pretty PrimRead           = text "_prim_read"
   pretty PrimWrite          = text "_prim_write"
+  pretty PrimWriteLength    = text "_prim_write_length"
   pretty PrimToEnd          = text "_prim_to_end"
   pretty PrimNewCursor      = text "_prim_new_cursor"
   pretty (PrimWriteCtor c)  = text "(_prim_write_ctor" <+> pretty c <> text ")"
