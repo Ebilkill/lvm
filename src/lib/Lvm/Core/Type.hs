@@ -13,14 +13,13 @@ module Lvm.Core.Type
    , typeSubstitute, typeTupleElements, typeRemoveArgumentStrictness, typeWeaken
    , typeSubstitutions, typeExtractFunction, typeApply, typeApplyList, dictionaryDataTypeName
    , typeList, typePrependList
+   , typeIsCursor, typeIsFunction
    -- Pattern synonyms
    , pattern TypeCons, pattern TypeFun
    ) where
 
 import Lvm.Common.Id
 import Text.PrettyPrint.Leijen
-
-import Debug.Trace
 
 import qualified Data.Set as S
 import qualified Data.Map as M
@@ -262,7 +261,7 @@ typeReindex k = go 0
     go n (TStrict t) = TStrict $ go n t
     -- go n (TCursor (TCursorNeeds ins out)) = TCursor $ TCursorNeeds (go k' `fmap` ins) (go k' out)
     -- go n (TCursor c@(TCursorEnd _)) = TCursor c
-    go n (TCursor c) = undefined
+    go n (TCursor c) = TCursor c -- TODO might be completely wrong
     go n (TVar idx)
       | idx < n = TVar idx
       | otherwise = TVar $ n + k (idx - n)
@@ -348,4 +347,14 @@ typeList (x:xs) = TypeCons x $ typeList xs
 typePrependList :: [Type] -> Type -> Type
 typePrependList []     t = t
 typePrependList (x:xs) t = TypeCons x $ typePrependList xs t
+
+-- Returns true if the type is a cursor, false otherwise.
+typeIsCursor :: Type -> Bool
+typeIsCursor (TStrict t) = typeIsCursor t
+typeIsCursor (TCursor _) = True
+typeIsCursor _ = False
+
+typeIsFunction :: Type -> Bool
+typeIsFunction (TypeFun _ _) = True
+typeIsFunction _             = False
 

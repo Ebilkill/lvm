@@ -21,6 +21,7 @@ module Lvm.Core.Expr
   , ppPattern
   , IntType(..)
   , getExpressionStrictness
+  , foldExpr
   )
 where
 
@@ -213,4 +214,61 @@ getExpressionStrictness (Forall _ _ expr) = getExpressionStrictness expr
 getExpressionStrictness (Lam strict _ expr) =
   strict : getExpressionStrictness expr
 getExpressionStrictness _ = []
+
+----------------------------------------------------------------
+-- Fold
+----------------------------------------------------------------
+
+foldExpr :: ( ( binds -> expr -> expr             -- Let
+              , Id -> alts -> expr                -- Match
+              , expr -> expr -> expr              -- Ap
+              , expr -> Type -> expr              -- ApType
+              , Bool -> Variable -> expr -> expr  -- Lam
+              , Quantor -> Kind -> expr -> expr   -- Forall
+              , Con -> expr                       -- Con
+              , Id -> expr                        -- Var
+              , Literal -> expr                   -- Lit
+              , PrimFun -> expr                   -- Prim
+              )
+            , ( [bind] -> binds -- Rec
+              , bind   -> binds -- Strict
+              , bind   -> binds -- NonRec
+              )
+            , ( Variable -> expr -> bind  -- Bind
+              )
+            , ( [alt] -> alts         -- Alts
+              , pat -> expr -> alt    -- Alt
+              )
+            , ( Con -> [Type] -> [Id] -> pat  -- PatCon
+              , Literal -> pat                -- PatLit
+              , pat                           -- PatDefault
+              )
+            )
+         -> Expr
+         -> expr
+foldExpr alg@((letfn, match, ap, aptype, lam, forAll, con, var, lit, prim), bindsAlg, bindAlg, altAlg, patAlt) = fe'
+  where
+    fe' (Let bs e)     = letfn (foldBinds bindsAlg bs) $ fe' e
+    fe' (Match i alts) = match i $ foldAlts altAlg alts
+    fe' (Ap fn arg)    = fe' fn `ap` fe' arg
+    fe' (ApType fn ty) = fe' fn `aptype` ty
+    fe' (Lam s v e)    = lam s v $ fe' e
+    fe' (Forall q k e) = forAll q k $ fe' e
+    fe' (Con c)        = con c
+    fe' (Var i)        = var i
+    fe' (Lit l)        = lit l
+    fe' (Prim p)       = prim p
+
+    foldBinds (recu, strict, nonRec) (Rec bs)   = recu $ map foldBind bs
+    foldBinds (recu, strict, nonRec) (Strict b) = strict $ foldBind b
+    foldBinds (recu, strict, nonRec) (NonRec b) = nonRec $ foldBind b
+  
+    foldBind (Bind v e) = bindAlg v $ foldExpr alg e
+
+    foldAlts (alts, alt) as = alts $ map (foldAlt altAlg) as
+    foldAlt  (alts, alt) (Alt p e) = alt (foldPat patAlt p) (foldExpr alg e)
+
+    foldPat (pcon, plit, pdef) (PatCon c ts ids) = pcon c ts ids
+    foldPat (pcon, plit, pdef) (PatLit l) = plit l
+    foldPat (pcon, plit, pdef) PatDefault = pdef
 
